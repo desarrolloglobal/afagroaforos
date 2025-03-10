@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import './crear_aforo.dart';
+import './crear_aforo_1.dart';
 
 class ListaAforos extends StatefulWidget {
   final int fincaId;
@@ -93,11 +93,29 @@ class _ListaAforosState extends State<ListaAforos> {
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: InkWell(
-                                onTap: () => Navigator.pushNamed(
-                                  context,
-                                  '/aforo_detalle',
-                                  arguments: aforo['id'],
-                                ),
+                                onTap: () {
+                                  try {
+                                    final id = aforo['id'];
+                                    print(
+                                        'Navegando a aforo con ID: $id'); // Para debug
+                                    Navigator.pushNamed(
+                                      context,
+                                      '/vista_aforo',
+                                      arguments: {
+                                        'aforoId': aforo['id'],
+                                        'fincaId': widget.fincaId,
+                                        'userId': widget.userId,
+                                      },
+                                    );
+                                  } catch (e) {
+                                    print('Error al navegar: $e');
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content:
+                                              Text('Error al abrir el aforo')),
+                                    );
+                                  }
+                                },
                                 child: Padding(
                                   padding: const EdgeInsets.all(16.0),
                                   child: Row(
@@ -134,7 +152,7 @@ class _ListaAforosState extends State<ListaAforos> {
       floatingActionButton: FloatingActionButton(
         onPressed: () => Navigator.pushNamed(
           context,
-          '/crear_aforo',
+          '/crear_aforo_1',
           arguments: {
             'fincaId': widget.fincaId,
             'userId': widget.userId,

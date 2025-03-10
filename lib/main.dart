@@ -7,7 +7,9 @@ import 'pages/login_page.dart';
 import 'pages/register_page.dart';
 import 'pages/home_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'pages/crear_aforo.dart';
+import 'pages/crear_aforo_1.dart';
+import 'pages/crear_aforo_2.dart';
+import 'pages/vista_aforo.dart';
 
 Future<void> main() async {
   try {
@@ -41,10 +43,33 @@ class MyApp extends StatelessWidget {
         '/': (context) => LoginPage(),
         '/register': (context) => RegisterPage(),
         '/home': (context) => HomePage(),
-        '/crear_aforo': (context) {
+        '/crear_aforo_1': (context) {
+          final args = ModalRoute.of(context)!.settings.arguments
+              as Map<String, dynamic>;
+          return CrearAforo1(
+            fincaId: args['fincaId'],
+            userId: args['userId'],
+          );
+        },
+        '/crear_aforo_2': (context) {
           final args = ModalRoute.of(context)!.settings.arguments
               as Map<String, dynamic>;
           return CrearAforo(
+            fincaId: args['fincaId'],
+            userId: args['userId'],
+            aforoId: args['aforoId'],
+            nConsecutivo: args['nConsecutivo'],
+            nDescripcion: args['nDescripcion'],
+            C28: args['C28'],
+            C29: args['C29'],
+          );
+        },
+        '/vista_aforo': (context) {
+          final Map<String, dynamic> args = ModalRoute.of(context)
+              ?.settings
+              .arguments as Map<String, dynamic>;
+          return VistaAforo(
+            aforoId: args['aforoId'],
             fincaId: args['fincaId'],
             userId: args['userId'],
           );

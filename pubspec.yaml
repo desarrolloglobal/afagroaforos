@@ -31,7 +31,15 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.3
 
+flutter_icons:
+  android: true
+  ios: true
+  web: true
+  image_path: "assets/images/icon.png" # Ruta de tu ícono
+  adaptive_icon_foreground: "assets/images/icon_foreground.png"
+  adaptive_icon_background: "assets/images/icon_background.png"
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
