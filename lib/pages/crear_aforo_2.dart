@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'vista_aforo.dart';
+import 'offline_manager.dart'; // Import the new class
 
 class CrearAforo extends StatefulWidget {
   final int fincaId;
@@ -12,6 +14,7 @@ class CrearAforo extends StatefulWidget {
   final String nDescripcion;
   final double C28;
   final double C29;
+  final bool isOffline; // New parameter to indicate if this is an offline aforo
 
   const CrearAforo({
     Key? key,
@@ -22,6 +25,7 @@ class CrearAforo extends StatefulWidget {
     required this.nDescripcion,
     required this.C28,
     required this.C29,
+    this.isOffline = false, // Default to online mode
   }) : super(key: key);
 
   @override
@@ -31,8 +35,10 @@ class CrearAforo extends StatefulWidget {
 class _CrearAforoState extends State<CrearAforo> {
   final _formKey = GlobalKey<FormState>();
   final _supabase = Supabase.instance.client;
+  final _offlineManager = OfflineManager(); // Use the offline manager
   bool _isLoading = false;
   bool _isCalculated = false;
+  bool _isOnline = true; // Track connectivity status
   Map<String, double> _calculatedResults = {};
 
   // Form controllers
@@ -66,6 +72,44 @@ class _CrearAforoState extends State<CrearAforo> {
     // Inicializar los controladores con los valores del aforo anterior
     _c28Controller.text = widget.C28.toString();
     _c29Controller.text = widget.C29.toStringAsFixed(2);
+
+    // Store current finca ID in offline manager
+    _offlineManager.setFincaId(widget.fincaId);
+    _offlineManager.setUserId(widget.userId);
+
+    // Check connectivity initially and setup listener
+    _checkConnectivity();
+    Connectivity().onConnectivityChanged.listen((result) {
+      if (result is List<ConnectivityResult>) {
+        // Handle list case - typically use the first/most relevant result
+        if (result.isNotEmpty) {
+          _updateConnectionStatus(result.first);
+        }
+      } else if (result is ConnectivityResult) {
+        // Handle single result case
+        _updateConnectionStatus(result);
+      }
+    });
+  }
+
+  Future<void> _checkConnectivity() async {
+    bool isOnline = await _offlineManager.checkConnectivity();
+    if (mounted) {
+      setState(() {
+        _isOnline = isOnline;
+      });
+    }
+  }
+
+  void _updateConnectionStatus(dynamic result) {
+    setState(() {
+      if (result is List<ConnectivityResult>) {
+        _isOnline =
+            result.isNotEmpty && result.first != ConnectivityResult.none;
+      } else if (result is ConnectivityResult) {
+        _isOnline = result != ConnectivityResult.none;
+      }
+    });
   }
 
   @override
@@ -203,7 +247,7 @@ class _CrearAforoState extends State<CrearAforo> {
     );
   }
 
-// Este método se ejecuta cuando el usuario hace clic en "Ver"
+  // Este método se ejecuta cuando el usuario hace clic en "Ver"
   void _calculateResults() {
     if (!_formKey.currentState!.validate()) return;
 
@@ -277,7 +321,7 @@ class _CrearAforoState extends State<CrearAforo> {
     }
   }
 
-// Este método calcula los valores adicionales según las fórmulas de la imagen
+  // Este método calcula los valores adicionales según las fórmulas de la imagen
   Map<String, double> _calculateAdditionalResults() {
     Map<String, double> results = Map.from(_calculatedResults);
 
@@ -391,6 +435,7 @@ class _CrearAforoState extends State<CrearAforo> {
     );
   }
 
+  // Modified to support offline mode
   Future<void> _guardarAforo() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -458,28 +503,62 @@ class _CrearAforoState extends State<CrearAforo> {
         updateData[key] = value;
       });
 
-      // Actualizar el registro en Supabase
-      await _supabase
-          .from('dbAforos')
-          .update(updateData)
-          .eq('id', widget.aforoId);
+      // Check if online or offline
+      if (_isOnline && !widget.isOffline) {
+        // Online mode - update directly in Supabase
+        await _supabase
+            .from('dbAforos')
+            .update(updateData)
+            .eq('id', widget.aforoId);
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Aforo guardado exitosamente')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Aforo guardado exitosamente')),
+          );
 
-        // Navegar a vista_aforo con el ID del aforo
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VistaAforo(
-              aforoId: widget.aforoId,
-              fincaId: widget.fincaId,
-              userId: widget.userId,
+          // Navegar a vista_aforo con el ID del aforo
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => VistaAforo(
+                aforoId: widget.aforoId,
+                fincaId: widget.fincaId,
+                userId: widget.userId,
+              ),
             ),
-          ),
-        );
+          );
+        }
+      } else {
+        // Offline mode - update locally stored aforo
+        final result = await _offlineManager.updateAforoOffline(
+            widget.aforoId, updateData);
+
+        if (result['success']) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                    'Aforo guardado localmente. Se sincronizará cuando haya conexión.'),
+                backgroundColor: Colors.blue,
+              ),
+            );
+
+            // Navegar a vista_aforo con el ID del aforo y un indicador de que es offline
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => VistaAforo(
+                  aforoId: widget.aforoId,
+                  fincaId: widget.fincaId,
+                  userId: widget.userId,
+                  isOffline: true,
+                ),
+              ),
+            );
+          }
+        } else {
+          throw Exception(result['message']);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -499,7 +578,7 @@ class _CrearAforoState extends State<CrearAforo> {
         backgroundColor: Color(0xFF1B4D3E),
         iconTheme: IconThemeData(color: Colors.white),
         title: Text(
-          'CREAR AFORO',
+          'CREAR AFORO${widget.isOffline || !_isOnline ? ' (OFFLINE)' : ''}',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
@@ -516,6 +595,29 @@ class _CrearAforoState extends State<CrearAforo> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // Show connectivity status indicator
+                      if (widget.isOffline || !_isOnline)
+                        Container(
+                          padding: EdgeInsets.all(10),
+                          margin: EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.wifi_off, color: Colors.orange),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Modo sin conexión. Los datos se guardarán localmente y se sincronizarán cuando se restablezca la conexión.',
+                                  style: TextStyle(color: Colors.orange[800]),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       Card(
                         child: Padding(
                           padding: const EdgeInsets.all(16.0),
@@ -569,7 +671,6 @@ class _CrearAforoState extends State<CrearAforo> {
                                 isNumeric: true,
                               ),
                               _buildTextField(
-                                // REEMPLAZA ESTA LÍNEA
                                 label: 'UGG en el potrero',
                                 controller: _c29Controller,
                                 isNumeric: true,
@@ -825,8 +926,7 @@ class _CrearAforoState extends State<CrearAforo> {
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(8),
                                     ),
-                                    minimumSize: Size(double.infinity,
-                                        48), // Asegura que tenga el mismo alto
+                                    minimumSize: Size(double.infinity, 48),
                                   ),
                                   child: _isLoading
                                       ? CircularProgressIndicator(

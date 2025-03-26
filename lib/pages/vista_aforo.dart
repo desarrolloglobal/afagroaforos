@@ -2,17 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import './lista_aforos.dart';
 import 'package:intl/intl.dart'; // Importar para el formato de números
+import 'offline_manager.dart'; // Import the new class
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'dart:async';
 
 class VistaAforo extends StatefulWidget {
   final int aforoId;
-  final int? fincaId; // Nuevo parámetro opcional
-  final String? userId; // Nuevo parámetro opcional
+  final int? fincaId; // Parámetro opcional
+  final String? userId; // Parámetro opcional
+  final bool isOffline; // New parameter to indicate offline mode
 
   const VistaAforo({
     Key? key,
     required this.aforoId,
     this.fincaId, // Opcional para mantener compatibilidad con usos existentes
     this.userId, // Opcional para mantener compatibilidad con usos existentes
+    this.isOffline = false, // Default to online mode
   }) : super(key: key);
 
   @override
@@ -21,9 +26,14 @@ class VistaAforo extends StatefulWidget {
 
 class _VistaAforoState extends State<VistaAforo> {
   final _supabase = Supabase.instance.client;
+  final _offlineManager = OfflineManager(); // Use the offline manager
   Map<String, dynamic> aforoData = {};
   bool isLoading = true;
+  bool _isOnline = true; // Track connectivity status
   int? fincaId; // Para almacenar el ID de la finca
+
+  // Subscripción para monitor de conectividad
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   // Formato para números sin decimales
   final formatSinDecimales = NumberFormat('#,###', 'es_ES');
@@ -34,11 +44,74 @@ class _VistaAforoState extends State<VistaAforo> {
   @override
   void initState() {
     super.initState();
+    _checkConnectivity();
+
+// In initState method, update the connectivity subscription
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen((results) {
+      setState(() {
+        _isOnline = results.any((result) => result != ConnectivityResult.none);
+      });
+
+      // If connection was restored, try to sync
+      if (_isOnline && widget.isOffline) {
+        _offlineManager.syncOfflineData().then((syncResult) {
+          if (syncResult['success'] &&
+              syncResult['synced'] != null &&
+              syncResult['synced'].length > 0) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Datos sincronizados exitosamente'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+          }
+        });
+      }
+    });
+
     _cargarAforo();
+  }
+
+  @override
+  void dispose() {
+    // Cancelar la suscripción cuando se destruye el widget
+    _connectivitySubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkConnectivity() async {
+    bool isOnline = await _offlineManager.checkConnectivity();
+    if (mounted) {
+      setState(() {
+        _isOnline = isOnline;
+      });
+    }
   }
 
   Future<void> _cargarAforo() async {
     try {
+      if (widget.isOffline || !_isOnline) {
+        // Load from offline storage
+        final offlineAforo =
+            await _offlineManager.getOfflineAforoById(widget.aforoId);
+
+        if (offlineAforo != null) {
+          setState(() {
+            aforoData = offlineAforo;
+            // Use the provided fincaId or the one in the aforo data
+            fincaId = widget.fincaId ?? offlineAforo['afofinca'];
+            isLoading = false;
+          });
+          return;
+        } else {
+          throw Exception('No se encontró el aforo offline');
+        }
+      }
+
+      // Online mode - load from Supabase
       final response = await _supabase
           .from('dbAforos')
           .select('*, afofinca') // Agregamos afofinca a la selección
@@ -53,9 +126,11 @@ class _VistaAforoState extends State<VistaAforo> {
       });
     } catch (e) {
       setState(() => isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Error al cargar el aforo')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al cargar el aforo: ${e.toString()}')),
+        );
+      }
     }
   }
 
@@ -159,6 +234,88 @@ class _VistaAforoState extends State<VistaAforo> {
     );
   }
 
+  // Method to manually trigger sync when user requests it
+  Future<void> _syncData() async {
+    if (!_isOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No hay conexión a Internet. Intente más tarde.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => isLoading = true);
+
+    try {
+      final result = await _offlineManager.syncOfflineData();
+
+      setState(() => isLoading = false);
+
+      if (result['success']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['message']),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // If this specific aforo was synced, reload it from server
+        bool thisAforoWasSynced = false;
+        if (result['synced'] != null) {
+          for (var synced in result['synced']) {
+            if (synced['tempId'] == widget.aforoId) {
+              thisAforoWasSynced = true;
+              // Navigate to the online version of this aforo
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => VistaAforo(
+                      aforoId: synced['realId'],
+                      fincaId: fincaId,
+                      userId: widget.userId,
+                    ),
+                  ),
+                );
+              }
+              break;
+            }
+          }
+        }
+
+        // If this aforo wasn't synced but we synced others, just show the message
+        if (!thisAforoWasSynced &&
+            result['synced'] != null &&
+            result['synced'].length > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Se sincronizaron ${result['synced'].length} aforos, pero este aforo aún está pendiente.'),
+              backgroundColor: Colors.blue,
+            ),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['message']),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error durante la sincronización: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -180,14 +337,56 @@ class _VistaAforoState extends State<VistaAforo> {
       appBar: AppBar(
         backgroundColor: Color(0xFF1B4D3E),
         iconTheme: IconThemeData(color: Colors.white),
-        title: Text('DETALLE DEL AFORO',
+        title: Text(
+            'DETALLE DEL AFORO${widget.isOffline || !_isOnline ? ' (OFFLINE)' : ''}',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        actions: [
+          // Add sync button for offline aforos when online
+          if (widget.isOffline && _isOnline)
+            IconButton(
+              icon: Icon(Icons.sync, color: Colors.white),
+              onPressed: _syncData,
+              tooltip: 'Sincronizar',
+            ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 800),
           child: Column(
             children: [
+              // Show connectivity status indicator for offline aforos
+              if (widget.isOffline)
+                Container(
+                  padding: EdgeInsets.all(10),
+                  margin: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: _isOnline
+                        ? Colors.blue.shade100
+                        : Colors.orange.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: _isOnline ? Colors.blue : Colors.orange),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(_isOnline ? Icons.wifi : Icons.wifi_off,
+                          color: _isOnline ? Colors.blue : Colors.orange),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _isOnline
+                              ? 'Este aforo está guardado localmente. Puede sincronizarlo ahora usando el botón en la parte superior.'
+                              : 'Este aforo está guardado localmente y se sincronizará cuando se restablezca la conexión.',
+                          style: TextStyle(
+                              color: _isOnline
+                                  ? Colors.blue[800]
+                                  : Colors.orange[800]),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               Expanded(
                 child: SingleChildScrollView(
                   padding: EdgeInsets.all(16),

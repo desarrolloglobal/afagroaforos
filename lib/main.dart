@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'pages/crear_aforo_1.dart';
 import 'pages/crear_aforo_2.dart';
 import 'pages/vista_aforo.dart';
+import 'pages/offline_manager.dart'; // Import the new offline manager
 
 Future<void> main() async {
   try {
@@ -23,6 +24,11 @@ Future<void> main() async {
         debug: true);
 
     await SharedPreferences.getInstance();
+    
+    // Initialize offline manager connectivity monitoring
+    final offlineManager = OfflineManager();
+    await offlineManager.initConnectivity();
+    
     runApp(MyApp());
   } catch (e) {
     print('Error en la inicialización: $e');
@@ -62,6 +68,7 @@ class MyApp extends StatelessWidget {
             nDescripcion: args['nDescripcion'],
             C28: args['C28'],
             C29: args['C29'],
+            isOffline: args['isOffline'] ?? false, // Add support for offline mode
           );
         },
         '/vista_aforo': (context) {
@@ -72,6 +79,7 @@ class MyApp extends StatelessWidget {
             aforoId: args['aforoId'],
             fincaId: args['fincaId'],
             userId: args['userId'],
+            isOffline: args['isOffline'] ?? false, // Add support for offline mode
           );
         },
       },

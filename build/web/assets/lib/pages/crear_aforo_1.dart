@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'offline_manager.dart'; // Import the new class
+import 'dart:async';
 
 class CrearAforo1 extends StatefulWidget {
   final int fincaId;
@@ -19,6 +22,9 @@ class CrearAforo1 extends StatefulWidget {
 
 class _CrearAforo1State extends State<CrearAforo1> {
   final _formKey = GlobalKey<FormState>();
+  final _offlineManager = OfflineManager(); // Use the offline manager
+  bool _isOnline = true; // Track connectivity status
+
   String? _selectedRaza;
   final List<String> _tiposRaza = [
     'No lo conoce',
@@ -57,6 +63,8 @@ class _CrearAforo1State extends State<CrearAforo1> {
     {'var': 'D20', 'name': 'Equinos y mulares adultos'},
     {'var': 'D21', 'name': 'Equinos y mulares jovenes'}
   ];
+// This should be a class field, outside of any method
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   @override
   void initState() {
@@ -66,6 +74,35 @@ class _CrearAforo1State extends State<CrearAforo1> {
           TextEditingController(text: '0');
     }
     _pesoHembraController.text = '0';
+
+    // Initialize date with today's date
+    _fechaController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+    // Store current finca ID in offline manager
+    _offlineManager.setFincaId(widget.fincaId);
+    _offlineManager.setUserId(widget.userId);
+
+    // Check connectivity initially and setup listener
+    _checkConnectivity();
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen(_updateConnectionStatus);
+  }
+
+  Future<void> _checkConnectivity() async {
+    bool isOnline = await _offlineManager.checkConnectivity();
+    if (mounted) {
+      setState(() {
+        _isOnline = isOnline;
+      });
+    }
+  }
+
+  void _updateConnectionStatus(List<ConnectivityResult> results) {
+    if (mounted) {
+      setState(() {
+        _isOnline = results.any((result) => result != ConnectivityResult.none);
+      });
+    }
   }
 
   @override
@@ -74,6 +111,7 @@ class _CrearAforo1State extends State<CrearAforo1> {
     _descripcionController.dispose();
     _pesoHembraController.dispose();
     _cantidadControllers.forEach((_, controller) => controller.dispose());
+    _connectivitySubscription?.cancel();
     super.dispose();
   }
 
@@ -351,6 +389,7 @@ class _CrearAforo1State extends State<CrearAforo1> {
     );
   }
 
+  // Modified method to support offline mode
   Future<void> _saveAforo() async {
     if (!_formKey.currentState!.validate()) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -390,37 +429,73 @@ class _CrearAforo1State extends State<CrearAforo1> {
         'afouser': widget.userId,
       };
 
-      // Insertar en la base de datos usando .select() para obtener el registro insertado
-      final response = await Supabase.instance.client
-          .from('dbAforos')
-          .insert(aforoData)
-          .select()
-          .single();
+      // Check if online or offline
+      if (_isOnline) {
+        // Online mode - save directly to Supabase
+        final response = await Supabase.instance.client
+            .from('dbAforos')
+            .insert(aforoData)
+            .select()
+            .single();
 
-      if (mounted) {
-        // Mostrar mensaje de éxito
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Aforo guardado con éxito'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        if (mounted) {
+          // Mostrar mensaje de éxito
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Aforo guardado con éxito'),
+              backgroundColor: Colors.green,
+            ),
+          );
 
-        // Navegar a crear_Aforo_2 con los datos necesarios
-        Navigator.pushNamed(
-          context,
-          '/crear_aforo_2',
-          arguments: {
-            'fincaId': widget.fincaId,
-            'userId': widget.userId,
-            'aforoId': response[
-                'id'], // Accedemos directamente al ID del registro insertado
-            'nConsecutivo': aforoData['nConsecutivo'],
-            'nDescripcion': aforoData['nDescripcion'],
-            'C28': aforoData['C28'],
-            'C29': aforoData['C29'],
-          },
-        );
+          // Navegar a crear_Aforo_2 con los datos necesarios
+          Navigator.pushNamed(
+            context,
+            '/crear_aforo_2',
+            arguments: {
+              'fincaId': widget.fincaId,
+              'userId': widget.userId,
+              'aforoId': response['id'],
+              'nConsecutivo': aforoData['nConsecutivo'],
+              'nDescripcion': aforoData['nDescripcion'],
+              'C28': aforoData['C28'],
+              'C29': aforoData['C29'],
+            },
+          );
+        }
+      } else {
+        // Offline mode - save to local storage
+        final result = await _offlineManager.saveAforoOffline(aforoData);
+
+        if (result['success']) {
+          if (mounted) {
+            // Mostrar mensaje de éxito offline
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Aforo guardado localmente. Se sincronizará cuando se restablezca la conexión.'),
+                backgroundColor: Colors.blue,
+              ),
+            );
+
+            // Navegar a crear_Aforo_2 con los datos necesarios y un indicador de que es offline
+            Navigator.pushNamed(
+              context,
+              '/crear_aforo_2',
+              arguments: {
+                'fincaId': widget.fincaId,
+                'userId': widget.userId,
+                'aforoId': result['id'],
+                'nConsecutivo': aforoData['nConsecutivo'],
+                'nDescripcion': aforoData['nDescripcion'],
+                'C28': aforoData['C28'],
+                'C29': aforoData['C29'],
+                'isOffline': true,
+              },
+            );
+          }
+        } else {
+          throw Exception(result['message']);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -441,7 +516,7 @@ class _CrearAforo1State extends State<CrearAforo1> {
         backgroundColor: Color(0xFF1B4D3E),
         iconTheme: IconThemeData(color: Colors.white),
         title: Text(
-          'CREAR AFORO 1',
+          'CREAR AFORO 1${_isOnline ? '' : ' (OFFLINE)'}',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
@@ -458,6 +533,29 @@ class _CrearAforo1State extends State<CrearAforo1> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // Show connectivity status indicator
+                      if (!_isOnline)
+                        Container(
+                          padding: EdgeInsets.all(10),
+                          margin: EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.wifi_off, color: Colors.orange),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Modo sin conexión. Los datos se guardarán localmente y se sincronizarán cuando se restablezca la conexión.',
+                                  style: TextStyle(color: Colors.orange[800]),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       Card(
                         child: Padding(
                           padding: const EdgeInsets.all(16.0),
